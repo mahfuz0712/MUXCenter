@@ -1,0 +1,10 @@
+{
+  "name": "MUX Center",
+  "version": "1.0.0",
+  "description": "Replaces the Android notification shade, quick settings and status bar with a futuristic HUD style Notification Center, Control Center and status bar using an accessibility overlay.",
+  "author": "Mohammad Mahfuz Rahman",
+  "ageRating": "3+",
+  "category": "Personalization",
+  "containsAds": false,
+  "type": "app"
+}

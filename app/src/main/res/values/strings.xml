@@ -1,0 +1,3 @@
+<resources>
+    <string name="a11y_desc">MUX Center draws the HUD status bar, Notification Center and Control Center on top of the screen. It does not read what is on your screen.</string>
+</resources>
