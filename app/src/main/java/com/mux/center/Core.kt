@@ -22,6 +22,13 @@ object Prefs {
     private lateinit var sp: SharedPreferences
     private var ready = false
 
+    val DEFAULT_HIDE: Set<String> = setOf(
+        "com.google.android.youtube", "com.netflix.mediaclient", "org.videolan.vlc",
+        "com.mxtech.videoplayer.ad", "com.mxtech.videoplayer.pro", "com.amazon.avod.thirdpartyclient",
+        "in.startv.hotstar"
+    )
+
+
     var accent by mutableIntStateOf(0)
     var barEnabled by mutableStateOf(true)
     var hideInFullscreen by mutableStateOf(true)
@@ -32,6 +39,16 @@ object Prefs {
     var split by mutableFloatStateOf(0.6f)
     var swapSides by mutableStateOf(false)
     var haptic by mutableStateOf(true)
+    /** 0 solid, 1 segmented (HUD chips with clear gaps), 2 clear */
+    var barStyle by mutableIntStateOf(1)
+    var edgeSwipe by mutableStateOf(true)
+    var hideLandscape by mutableStateOf(true)
+    var hideApps by mutableStateOf<Set<String>>(DEFAULT_HIDE)
+    var hiddenTiles by mutableStateOf<Set<String>>(emptySet())
+    var eyeLevel by mutableIntStateOf(0)
+    var reading by mutableStateOf(false)
+    var dimLevel by mutableIntStateOf(0)
+    var awake by mutableStateOf(false)
 
     fun init(ctx: Context) {
         if (ready) return
@@ -47,6 +64,15 @@ object Prefs {
         split = sp.getFloat("split", 0.6f)
         swapSides = sp.getBoolean("swap", false)
         haptic = sp.getBoolean("haptic", true)
+        barStyle = sp.getInt("barstyle", 1)
+        edgeSwipe = sp.getBoolean("edge", true)
+        hideLandscape = sp.getBoolean("hidland", true)
+        hideApps = sp.getStringSet("hideapps", null)?.toSet() ?: DEFAULT_HIDE
+        hiddenTiles = sp.getStringSet("hiddentiles", null)?.toSet() ?: emptySet()
+        eyeLevel = sp.getInt("eye", 0)
+        reading = sp.getBoolean("reading", false)
+        dimLevel = sp.getInt("dim", 0)
+        awake = sp.getBoolean("awake", false)
     }
 
     fun save() {
@@ -55,7 +81,10 @@ object Prefs {
             .putInt("accent", accent).putBoolean("bar", barEnabled).putBoolean("hidefs", hideInFullscreen)
             .putBoolean("h24", use24h).putBoolean("secs", showSeconds).putBoolean("date", showDate)
             .putBoolean("gest", gesturesEnabled).putFloat("split", split).putBoolean("swap", swapSides)
-            .putBoolean("haptic", haptic).apply()
+            .putBoolean("haptic", haptic).putInt("barstyle", barStyle).putBoolean("edge", edgeSwipe)
+            .putBoolean("hidland", hideLandscape).putStringSet("hideapps", HashSet(hideApps))
+            .putStringSet("hiddentiles", HashSet(hiddenTiles)).putInt("eye", eyeLevel)
+            .putBoolean("reading", reading).putInt("dim", dimLevel).putBoolean("awake", awake).apply()
     }
 }
 
@@ -66,6 +95,9 @@ object UiState {
     var open by mutableStateOf(false)
     var barShown by mutableStateOf(true)
     var statusPx by mutableIntStateOf(0)
+    var landscape by mutableStateOf(false)
+    /** The app that is in front right now (from accessibility window events). */
+    var pkg by mutableStateOf("")
 }
 
 /** Checks for the permissions and services MUX Center needs. */

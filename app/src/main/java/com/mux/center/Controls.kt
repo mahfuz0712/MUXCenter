@@ -1,5 +1,6 @@
 package com.mux.center
 
+import android.accessibilityservice.AccessibilityService
 import android.app.NotificationManager
 import android.bluetooth.BluetoothManager
 import android.content.Context
@@ -13,17 +14,20 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.net.wifi.WifiManager
+import android.nfc.NfcAdapter
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.provider.AlarmClock
+import android.provider.MediaStore
 import android.provider.Settings
-import android.accessibilityservice.AccessibilityService
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
 class Tile(
+    val id: String,
     val label: String,
     val icon: Ic,
     val on: (Context) -> Boolean,
@@ -56,6 +60,11 @@ object Controls {
         } catch (e: Exception) {
             try { ctx.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (e2: Exception) { }
         }
+        CenterService.instance?.closePanel()
+    }
+
+    fun start(ctx: Context, intent: Intent) {
+        try { ctx.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (e: Exception) { }
         CenterService.instance?.closePanel()
     }
 
@@ -108,6 +117,8 @@ object Controls {
 
     fun dark(ctx: Context): Boolean =
         (ctx.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+
+    fun nfc(ctx: Context): Boolean = try { NfcAdapter.getDefaultAdapter(ctx)?.isEnabled == true } catch (e: Exception) { false }
 
     // ------------------------------------------------------------------ actions
 
@@ -205,35 +216,74 @@ object Controls {
         try { am.setStreamVolume(stream, (f * am.getStreamMaxVolume(stream)).toInt(), 0) } catch (e: SecurityException) { }
     }
 
+    private val timeouts = listOf(15_000, 30_000, 60_000, 120_000, 300_000, 600_000, 1_800_000)
+
+    fun timeoutMs(ctx: Context): Int = Settings.System.getInt(ctx.contentResolver, Settings.System.SCREEN_OFF_TIMEOUT, 30_000)
+
+    fun timeoutLabel(ms: Int): String = if (ms < 60_000) "${ms / 1000}s" else "${ms / 60_000}m"
+
+    fun cycleTimeout(ctx: Context) {
+        if (!Settings.System.canWrite(ctx)) {
+            go(ctx, Settings.ACTION_MANAGE_WRITE_SETTINGS, true)
+            return
+        }
+        val cur = timeoutMs(ctx)
+        val next = timeouts.firstOrNull { it > cur } ?: timeouts.first()
+        Settings.System.putInt(ctx.contentResolver, Settings.System.SCREEN_OFF_TIMEOUT, next)
+    }
+
     private fun global(action: Int) { CenterService.instance?.act(action) }
 
-    // ------------------------------------------------------------------ tiles (first two are shown wide)
+    private fun levelName(l: Int): String = when (l) { 0 -> "Off"; 1 -> "Low"; 2 -> "Medium"; else -> "High" }
+
+    // ------------------------------------------------------------------ tiles (the first two are shown wide)
 
     val tiles: List<Tile> = listOf(
-        Tile("Wi-Fi", Ic.WIFI, { wifiOn(it) }, { if (wifiConnected(it)) "Connected" else if (wifiOn(it)) "On" else "Off" },
+        Tile("wifi", "Wi-Fi", Ic.WIFI, { wifiOn(it) }, { if (wifiConnected(it)) "Connected" else if (wifiOn(it)) "On" else "Off" },
             { go(it, internetPanel()) }, { go(it, Settings.ACTION_WIFI_SETTINGS) }),
-        Tile("Bluetooth", Ic.BLUETOOTH, { btOn(it) }, { if (btOn(it)) "On" else "Off" },
+        Tile("bluetooth", "Bluetooth", Ic.BLUETOOTH, { btOn(it) }, { if (btOn(it)) "On" else "Off" },
             { go(it, Settings.ACTION_BLUETOOTH_SETTINGS) }, { go(it, Settings.ACTION_BLUETOOTH_SETTINGS) }),
-        Tile("Airplane", Ic.AIRPLANE, { airplane(it) }, { if (airplane(it)) "On" else "Off" },
+        Tile("airplane", "Airplane", Ic.AIRPLANE, { airplane(it) }, { if (airplane(it)) "On" else "Off" },
             { go(it, Settings.ACTION_AIRPLANE_MODE_SETTINGS) }),
-        Tile("Mobile Data", Ic.DATA, { dataOn(it) }, { if (dataOn(it)) "On" else "Off" },
+        Tile("data", "Mobile Data", Ic.DATA, { dataOn(it) }, { if (dataOn(it)) "On" else "Off" },
             { go(it, internetPanel()) }, { go(it, Settings.ACTION_DATA_ROAMING_SETTINGS) }),
-        Tile("Hotspot", Ic.HOTSPOT, { false }, { "Open" }, { go(it, Settings.ACTION_WIRELESS_SETTINGS) }),
-        Tile("Battery Saver", Ic.BATTERY, { saver(it) }, { if (saver(it)) "On" else "Off" },
+        Tile("hotspot", "Hotspot", Ic.HOTSPOT, { false }, { "Open" }, { go(it, Settings.ACTION_WIRELESS_SETTINGS) }),
+        Tile("saver", "Battery Saver", Ic.BATTERY, { saver(it) }, { if (saver(it)) "On" else "Off" },
             { go(it, Settings.ACTION_BATTERY_SAVER_SETTINGS) }),
-        Tile("Do Not Disturb", Ic.MOON, { dnd(it) }, { if (dnd(it)) "On" else "Off" }, { toggleDnd(it) }),
-        Tile("Location", Ic.PIN, { location(it) }, { if (location(it)) "On" else "Off" },
+        Tile("dnd", "Do Not Disturb", Ic.MOON, { dnd(it) }, { if (dnd(it)) "On" else "Off" }, { toggleDnd(it) }),
+        Tile("location", "Location", Ic.PIN, { location(it) }, { if (location(it)) "On" else "Off" },
             { go(it, Settings.ACTION_LOCATION_SOURCE_SETTINGS) }),
-        Tile("Auto Rotate", Ic.ROTATE, { rotate(it) }, { if (rotate(it)) "On" else "Off" }, { toggleRotate(it) }),
-        Tile("Flashlight", Ic.TORCH, { torch }, { if (torch) "On" else "Off" }, { toggleTorch(it) }),
-        Tile("Sound", Ic.BELL, { ringer(it) == AudioManager.RINGER_MODE_NORMAL },
+        Tile("rotate", "Auto Rotate", Ic.ROTATE, { rotate(it) }, { if (rotate(it)) "On" else "Off" }, { toggleRotate(it) }),
+        Tile("torch", "Flashlight", Ic.TORCH, { torch }, { if (torch) "On" else "Off" }, { toggleTorch(it) }),
+        Tile("sound", "Sound", Ic.BELL, { ringer(it) == AudioManager.RINGER_MODE_NORMAL },
             { when (ringer(it)) { AudioManager.RINGER_MODE_NORMAL -> "Ring"; AudioManager.RINGER_MODE_VIBRATE -> "Vibrate"; else -> "Silent" } },
             { cycleRinger(it) }),
-        Tile("Dark Mode", Ic.CONTRAST, { dark(it) }, { if (dark(it)) "On" else "Off" },
+        Tile("dark", "Dark Mode", Ic.CONTRAST, { dark(it) }, { if (dark(it)) "On" else "Off" },
             { go(it, Settings.ACTION_DISPLAY_SETTINGS) }),
-        Tile("Screenshot", Ic.SHOT, { false }, { "" }, { global(AccessibilityService.GLOBAL_ACTION_TAKE_SCREENSHOT) }),
-        Tile("Lock", Ic.LOCK, { false }, { "" }, { global(AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN) }),
-        Tile("Power", Ic.POWER, { false }, { "" }, { global(AccessibilityService.GLOBAL_ACTION_POWER_DIALOG) }),
-        Tile("Recents", Ic.RECENTS, { false }, { "" }, { global(AccessibilityService.GLOBAL_ACTION_RECENTS) })
+        Tile("eye", "Eye Care", Ic.EYE, { Prefs.eyeLevel > 0 }, { levelName(Prefs.eyeLevel) },
+            { Prefs.eyeLevel = if (Prefs.eyeLevel == 0) 2 else 0; Prefs.save() },
+            { Prefs.eyeLevel = if (Prefs.eyeLevel >= 3) 1 else Prefs.eyeLevel + 1; Prefs.save() }),
+        Tile("reading", "Reading Mode", Ic.BOOK, { Prefs.reading }, { if (Prefs.reading) "On" else "Off" },
+            { Prefs.reading = !Prefs.reading; Prefs.save() }),
+        Tile("dim", "Extra Dim", Ic.DIM, { Prefs.dimLevel > 0 }, { levelName(Prefs.dimLevel) },
+            { Prefs.dimLevel = (Prefs.dimLevel + 1) % 4; Prefs.save() }),
+        Tile("night", "Night Light", Ic.MOON, { false }, { "Open" }, { go(it, Settings.ACTION_NIGHT_DISPLAY_SETTINGS) }),
+        Tile("awake", "Keep Awake", Ic.SUN, { Prefs.awake }, { if (Prefs.awake) "On" else "Off" },
+            { Prefs.awake = !Prefs.awake; Prefs.save() }),
+        Tile("timeout", "Screen Timeout", Ic.CLOCK, { false }, { timeoutLabel(timeoutMs(it)) }, { cycleTimeout(it) }),
+        Tile("nfc", "NFC", Ic.NFC, { nfc(it) }, { if (nfc(it)) "On" else "Off" }, { go(it, Settings.ACTION_NFC_SETTINGS) }),
+        Tile("cast", "Cast", Ic.CAST, { false }, { "Open" }, { go(it, Settings.ACTION_CAST_SETTINGS) }),
+        Tile("screenshot", "Screenshot", Ic.SHOT, { false }, { "" }, { global(AccessibilityService.GLOBAL_ACTION_TAKE_SCREENSHOT) }),
+        Tile("camera", "Camera", Ic.CAMERA, { false }, { "" }, { start(it, Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA)) }),
+        Tile("calc", "Calculator", Ic.CALC, { false }, { "" },
+            { start(it, Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_CALCULATOR)) }),
+        Tile("clock", "Alarms", Ic.CLOCK, { false }, { "" }, { start(it, Intent(AlarmClock.ACTION_SHOW_ALARMS)) }),
+        Tile("lock", "Lock", Ic.LOCK, { false }, { "" }, { global(AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN) }),
+        Tile("power", "Power", Ic.POWER, { false }, { "" }, { global(AccessibilityService.GLOBAL_ACTION_POWER_DIALOG) }),
+        Tile("recents", "Recents", Ic.RECENTS, { false }, { "" }, { global(AccessibilityService.GLOBAL_ACTION_RECENTS) }),
+        Tile("settings", "Settings", Ic.GEAR, { false }, { "" }, { go(it, Settings.ACTION_SETTINGS) })
     )
+
+    /** Wi-Fi and Bluetooth are always shown. The user can hide the rest in the TILES tab. */
+    fun visible(): List<Tile> = tiles.filter { it.id == "wifi" || it.id == "bluetooth" || it.id !in Prefs.hiddenTiles }
 }

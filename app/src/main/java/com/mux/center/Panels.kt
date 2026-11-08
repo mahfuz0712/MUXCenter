@@ -2,6 +2,7 @@ package com.mux.center
 
 import android.content.Intent
 import android.media.AudioManager
+import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -11,6 +12,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +25,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -34,6 +37,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -48,13 +54,23 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /** Slides the active panel down from the top. */
 @Composable
@@ -76,11 +92,50 @@ private fun PanelFrame(
     content: @Composable ColumnScope.() -> Unit
 ) {
     val ctx = LocalContext.current
-    val sh = if (UiState.statusPx > 0) with(LocalDensity.current) { UiState.statusPx.toDp() } else 26.dp
+    val density = LocalDensity.current
+    val sh = if (UiState.statusPx > 0) with(density) { UiState.statusPx.toDp() } else 26.dp
+    val closePx = with(density) { 90.dp.toPx() }
+    val closeNow by rememberUpdatedState(close)
     val acc = remember { floatArrayOf(0f) }
+
+    // Swipe up anywhere closes the panel. Scrollable content (the lists) reports what it could not
+    // scroll any more through nested scroll, so a swipe up at the end of a list closes it too.
+    val connection = remember(closePx) {
+        object : NestedScrollConnection {
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (available.y < 0f) {
+                    acc[0] += available.y
+                    if (acc[0] < -closePx) {
+                        acc[0] = 0f
+                        closeNow()
+                    }
+                } else if (available.y > 0f) {
+                    acc[0] = 0f
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                acc[0] = 0f
+                return Velocity.Zero
+            }
+        }
+    }
+
     HudBackground {
-        Column(Modifier.fillMaxSize()) {
-            HudStatusBar(Modifier.height(sh))
+        Column(
+            Modifier.fillMaxSize()
+                .nestedScroll(connection)
+                .pointerInput(closePx) {
+                    detectVerticalDragGestures(
+                        onDragStart = { acc[0] = 0f },
+                        onDragEnd = { if (acc[0] < -closePx * 0.6f) closeNow(); acc[0] = 0f },
+                        onDragCancel = { acc[0] = 0f },
+                        onVerticalDrag = { _, dy -> acc[0] += dy }
+                    )
+                }
+        ) {
+            HudStatusBar(Modifier.height(sh), 2)
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -95,16 +150,7 @@ private fun PanelFrame(
             }
             Column(Modifier.weight(1f).fillMaxWidth(), content = content)
             Box(
-                Modifier.fillMaxWidth().navigationBarsPadding().height(40.dp)
-                    .clickable { close() }
-                    .pointerInput(Unit) {
-                        detectVerticalDragGestures(
-                            onDragStart = { acc[0] = 0f },
-                            onDragEnd = { if (acc[0] < -40f) close() },
-                            onDragCancel = {},
-                            onVerticalDrag = { _, dy -> acc[0] += dy }
-                        )
-                    },
+                Modifier.fillMaxWidth().navigationBarsPadding().height(40.dp).clickable { close() },
                 Alignment.Center
             ) { Box(Modifier.width(120.dp).height(3.dp).background(cMain)) }
         }
@@ -175,9 +221,42 @@ private fun SectionHeader(title: String, count: Int, expanded: Boolean, onToggle
 @Composable
 private fun NotifCard(n: NotifItem, close: () -> Unit) {
     var exp by remember { mutableStateOf(false) }
+    var dragX by remember { mutableFloatStateOf(0f) }
+    var width by remember { mutableIntStateOf(1) }
+    val scope = rememberCoroutineScope()
     val shape = HudShape(10.dp)
     Column(
-        Modifier.fillMaxWidth().background(cPanel, shape).border(1.dp, cDim, shape)
+        Modifier.fillMaxWidth()
+            .onSizeChanged { width = it.width.coerceAtLeast(1) }
+            .offset { IntOffset(dragX.roundToInt(), 0) }
+            .graphicsLayer { alpha = 1f - (abs(dragX) / width).coerceIn(0f, 1f) * 0.85f }
+            .pointerInput(n.key, n.clearable) {
+                if (n.clearable) {
+                    // swipe left or right to remove the notification
+                    detectHorizontalDragGestures(
+                        onDragEnd = {
+                            scope.launch {
+                                if (abs(dragX) > width * 0.33f) {
+                                    val target = if (dragX > 0f) width.toFloat() else -width.toFloat()
+                                    animate(dragX, target, animationSpec = tween(160)) { v, _ -> dragX = v }
+                                    Notifs.dismiss(n.key)
+                                    delay(800)
+                                    // still here: Android did not let us remove it, slide it back
+                                    animate(dragX, 0f, animationSpec = tween(200)) { v, _ -> dragX = v }
+                                } else {
+                                    animate(dragX, 0f, animationSpec = tween(160)) { v, _ -> dragX = v }
+                                }
+                            }
+                        },
+                        onDragCancel = { scope.launch { animate(dragX, 0f, animationSpec = tween(160)) { v, _ -> dragX = v } } },
+                        onHorizontalDrag = { change, dx ->
+                            change.consume()
+                            dragX += dx
+                        }
+                    )
+                }
+            }
+            .background(cPanel, shape).border(1.dp, cDim, shape)
             .clickable {
                 try { n.intent?.send() } catch (e: Exception) { }
                 close()
@@ -232,7 +311,7 @@ fun ControlPanel(close: () -> Unit) {
             Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 14.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            val tiles = Controls.tiles
+            val tiles = Controls.visible()
             if (tick >= 0) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     WideTile(tiles[0], Modifier.weight(1f))

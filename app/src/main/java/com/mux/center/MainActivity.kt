@@ -1,6 +1,7 @@
 package com.mux.center
 
 import android.Manifest
+import android.content.Intent
 import android.graphics.Color as AColor
 import android.os.Bundle
 import android.provider.Settings
@@ -12,12 +13,17 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -32,19 +38,27 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -58,7 +72,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private val TABS = listOf("SETUP", "LOOK", "GESTURES", "SYS")
+private val TABS = listOf("SETUP", "LOOK", "TILES", "GESTURES", "SYS")
 
 @Composable
 fun App() {
@@ -90,7 +104,8 @@ fun App() {
                 when (tab) {
                     0 -> SetupScreen()
                     1 -> LookScreen()
-                    2 -> GestureScreen()
+                    2 -> TilesScreen()
+                    3 -> GestureScreen()
                     else -> SysScreen { update = it }
                 }
             }
@@ -217,7 +232,7 @@ private fun SetupScreen() {
                 ) { Controls.go(ctx, Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS) }
                 Step(
                     "OPTIONAL  PHONE STATE",
-                    "Shows the mobile signal bars and the 4G or 5G label in the status bar.",
+                    "Shows the mobile signal bars, the 4G or 5G label and the VoLTE tag in the status bar.",
                     phone, "ALLOW"
                 ) { phoneLauncher.launch(Manifest.permission.READ_PHONE_STATE) }
                 Step(
@@ -234,6 +249,7 @@ private fun SetupScreen() {
 
 @Composable
 private fun LookScreen() {
+    var picker by remember { mutableStateOf(false) }
     Page {
         T("LOOK", 16f, cMain, true)
         TwoCol(
@@ -247,18 +263,137 @@ private fun LookScreen() {
                 }
                 Panel("STATUS BAR") {
                     ToggleRow("HUD STATUS BAR", "Replaces the system status bar with the HUD one.", Prefs.barEnabled) { Prefs.barEnabled = it; Prefs.save() }
-                    ToggleRow(
-                        "HIDE IN FULL SCREEN (EXPERIMENTAL)",
-                        "Hides the HUD bar in videos and games, when the system hides its own bar.",
-                        Prefs.hideInFullscreen
-                    ) { Prefs.hideInFullscreen = it; Prefs.save() }
+                    T("BACKGROUND", 10f, cSub, mod = Modifier.padding(top = 8.dp, bottom = 4.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf("SOLID", "SEGMENTED", "CLEAR").forEachIndexed { i, s ->
+                            Chip(s, Prefs.barStyle == i, Modifier.weight(1f)) { Prefs.barStyle = i; Prefs.save() }
+                        }
+                    }
+                    T(
+                        "SOLID covers the system bar fully. SEGMENTED draws HUD chips with transparent gaps. CLEAR has no background at all. " +
+                            "Android cannot hide the real status bar icons, so with CLEAR (and in the gaps) the system icons can show through underneath.",
+                        10f, cSub, lines = 7, mod = Modifier.padding(top = 6.dp)
+                    )
                 }
             },
             {
+                Panel("FULL SCREEN") {
+                    ToggleRow(
+                        "HIDE IN FULL SCREEN VIDEO AND GAMES (EXPERIMENTAL)",
+                        "Uses what Android reports about the system bar. Some phones do not report it, use the options below too.",
+                        Prefs.hideInFullscreen
+                    ) { Prefs.hideInFullscreen = it; Prefs.save() }
+                    ToggleRow("HIDE IN LANDSCAPE", "Videos and games are almost always full screen when the phone is sideways.", Prefs.hideLandscape) {
+                        Prefs.hideLandscape = it; Prefs.save()
+                    }
+                    ToggleRow(
+                        "SWIPE FROM THE TOP EDGE EVEN WHEN HIDDEN",
+                        "Keeps a thin invisible strip at the top so you can still open the panels in full screen.",
+                        Prefs.edgeSwipe
+                    ) { Prefs.edgeSwipe = it; Prefs.save() }
+                    Chip("HIDE IN CHOSEN APPS (${Prefs.hideApps.size})", false, Modifier.fillMaxWidth().padding(top = 8.dp)) { picker = true }
+                }
                 Panel("CLOCK") {
                     ToggleRow("24 HOUR CLOCK", "Off shows AM and PM.", Prefs.use24h) { Prefs.use24h = it; Prefs.save() }
                     ToggleRow("SHOW SECONDS", "", Prefs.showSeconds) { Prefs.showSeconds = it; Prefs.save() }
                     ToggleRow("SHOW DATE", "", Prefs.showDate) { Prefs.showDate = it; Prefs.save() }
+                }
+            }
+        )
+    }
+    if (picker) AppPickerDialog { picker = false }
+}
+
+private class AppEntry(val label: String, val pkg: String)
+
+@Composable
+private fun AppPickerDialog(onClose: () -> Unit) {
+    val ctx = LocalContext.current
+    val apps by produceState<List<AppEntry>>(emptyList()) {
+        value = withContext(Dispatchers.IO) {
+            val pm = ctx.packageManager
+            val i = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            pm.queryIntentActivities(i, 0)
+                .map { AppEntry(it.loadLabel(pm).toString(), it.activityInfo.packageName) }
+                .filter { it.pkg != ctx.packageName }
+                .distinctBy { it.pkg }
+                .sortedBy { it.label.lowercase() }
+        }
+    }
+    var query by remember { mutableStateOf("") }
+    val shape = HudShape(10.dp)
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Column(
+            Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.88f).background(Bg, shape).border(1.dp, cDim, shape).padding(12.dp)
+        ) {
+            T("// HIDE THE HUD BAR IN THESE APPS", 12f, cSub, true, Modifier.padding(bottom = 8.dp))
+            BasicTextField(
+                value = query, onValueChange = { query = it }, singleLine = true,
+                textStyle = TextStyle(color = cText, fontFamily = Mono, fontSize = 14.sp),
+                cursorBrush = SolidColor(cMain),
+                modifier = Modifier.fillMaxWidth().border(1.dp, cDim).padding(10.dp),
+                decorationBox = { inner ->
+                    Box {
+                        if (query.isEmpty()) T("SEARCH APPS...", 12f, cSub)
+                        inner()
+                    }
+                }
+            )
+            val list = apps.filter { query.isBlank() || it.label.contains(query, true) || it.pkg.contains(query, true) }
+            LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp)) {
+                items(list, key = { it.pkg }) { a ->
+                    val hidden = a.pkg in Prefs.hideApps
+                    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                            T(a.label, 13f, cText, true)
+                            T(a.pkg, 9f, cSub)
+                        }
+                        Chip(if (hidden) "HIDDEN" else "SHOWN", hidden, Modifier.width(84.dp)) {
+                            Prefs.hideApps = if (hidden) Prefs.hideApps - a.pkg else Prefs.hideApps + a.pkg
+                            Prefs.save()
+                        }
+                    }
+                }
+            }
+            Chip("DONE", true, Modifier.fillMaxWidth().padding(top = 8.dp)) { onClose() }
+        }
+    }
+}
+
+@Composable
+private fun TilesScreen() {
+    Page {
+        T("TILES", 16f, cMain, true)
+        TwoCol(
+            {
+                Panel("SCREEN FILTERS (TRY THEM HERE)") {
+                    T("EYE CARE (WARM LIGHT)", 10f, cSub, mod = Modifier.padding(bottom = 4.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf("OFF", "LOW", "MED", "HIGH").forEachIndexed { i, s ->
+                            Chip(s, Prefs.eyeLevel == i, Modifier.weight(1f)) { Prefs.eyeLevel = i; Prefs.save() }
+                        }
+                    }
+                    T("EXTRA DIM", 10f, cSub, mod = Modifier.padding(top = 10.dp, bottom = 4.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf("OFF", "LOW", "MED", "HIGH").forEachIndexed { i, s ->
+                            Chip(s, Prefs.dimLevel == i, Modifier.weight(1f)) { Prefs.dimLevel = i; Prefs.save() }
+                        }
+                    }
+                    ToggleRow("READING MODE", "Paper like warm tint with a little dimming.", Prefs.reading) { Prefs.reading = it; Prefs.save() }
+                    ToggleRow("KEEP SCREEN AWAKE", "The screen does not turn off while this is on.", Prefs.awake) { Prefs.awake = it; Prefs.save() }
+                    T("In the Control Center, tap Eye Care to switch it, long press to change the strength.", 10f, cSub, lines = 3, mod = Modifier.padding(top = 6.dp))
+                }
+            },
+            {
+                Panel("CONTROL CENTER TILES") {
+                    T("Choose which tiles the Control Center shows. Wi-Fi and Bluetooth are always there.", 10f, cSub, lines = 3, mod = Modifier.padding(bottom = 6.dp))
+                    for (t in Controls.tiles) {
+                        if (t.id == "wifi" || t.id == "bluetooth") continue
+                        ToggleRow(t.label.uppercase(), "", t.id !in Prefs.hiddenTiles) { show ->
+                            Prefs.hiddenTiles = if (show) Prefs.hiddenTiles - t.id else Prefs.hiddenTiles + t.id
+                            Prefs.save()
+                        }
+                    }
                 }
             }
         )

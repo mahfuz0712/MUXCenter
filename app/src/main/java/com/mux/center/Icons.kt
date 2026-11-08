@@ -21,7 +21,8 @@ import kotlin.math.sin
 
 enum class Ic {
     WIFI, BLUETOOTH, AIRPLANE, DATA, HOTSPOT, BATTERY, MOON, PIN, ROTATE, TORCH, BELL, BELL_OFF,
-    CONTRAST, SHOT, LOCK, POWER, RECENTS, GEAR, SUN, VOLUME, CLOSE, UP, DOWN, PLAY, PAUSE, NEXT, PREV, SHIELD
+    CONTRAST, SHOT, LOCK, POWER, RECENTS, GEAR, SUN, VOLUME, CLOSE, UP, DOWN, PLAY, PAUSE, NEXT, PREV, SHIELD,
+    EYE, BOOK, CAST, CAMERA, CALC, CLOCK, DIM, NFC
 }
 
 /** Simple line icons drawn with primitives, so the app needs no icon library. [bg] is the color behind the icon. */
@@ -154,6 +155,49 @@ fun DrawScope.drawIcon(kind: Ic, c: Color, bg: Color) {
         Ic.PREV -> {
             poly(18f, 5f, 9f, 12f, 18f, 19f, close = true, fill = true)
             drawRect(c, p(4.5f, 5f), Size(2.5f * u, 14f * u))
+        }
+        Ic.EYE -> {
+            drawOval(c, p(2f, 6.5f), Size(20f * u, 11f * u), style = st)
+            drawCircle(c, 3.2f * u, p(12f, 12f), style = st)
+            dot(12f, 12f, 1.2f)
+        }
+        Ic.BOOK -> {
+            poly(3f, 6f, 11f, 8f, 11f, 20f, 3f, 18f, close = true)
+            poly(21f, 6f, 13f, 8f, 13f, 20f, 21f, 18f, close = true)
+        }
+        Ic.CAST -> {
+            poly(3f, 6f, 21f, 6f, 21f, 18f, 14f, 18f)
+            arc(3f, 18f, 5f, -90f, 90f); arc(3f, 18f, 9f, -90f, 90f)
+            dot(4f, 19.5f, 1.2f)
+        }
+        Ic.CAMERA -> {
+            drawRoundRect(c, p(3f, 7f), Size(18f * u, 12f * u), CornerRadius(2f * u), style = st)
+            drawCircle(c, 3.6f * u, p(12f, 13f), style = st)
+            poly(8f, 7f, 9.5f, 4.5f, 14.5f, 4.5f, 16f, 7f)
+        }
+        Ic.CALC -> {
+            drawRoundRect(c, p(5f, 3f), Size(14f * u, 18f * u), CornerRadius(2f * u), style = st)
+            drawRect(c, p(7.5f, 5.5f), Size(9f * u, 3.5f * u), style = st)
+            for (x in listOf(8.5f, 12f, 15.5f)) for (y in listOf(12.5f, 15.5f, 18.5f)) dot(x, y, 1f)
+        }
+        Ic.CLOCK -> {
+            drawCircle(c, 9f * u, p(12f, 12f), style = st)
+            poly(12f, 7f, 12f, 12f, 16f, 14f)
+        }
+        Ic.DIM -> {
+            drawCircle(c.copy(alpha = 0.4f), 4.5f * u, p(12f, 12f))
+            drawCircle(c, 4.5f * u, p(12f, 12f), style = st)
+            for (i in 0 until 4) {
+                val a = i * PI / 2 + PI / 4
+                line(
+                    (12 + 7.5 * cos(a)).toFloat(), (12 + 7.5 * sin(a)).toFloat(),
+                    (12 + 10.5 * cos(a)).toFloat(), (12 + 10.5 * sin(a)).toFloat()
+                )
+            }
+        }
+        Ic.NFC -> {
+            dot(5f, 12f, 1.6f)
+            arc(5f, 12f, 5f, -45f, 90f); arc(5f, 12f, 9f, -45f, 90f); arc(5f, 12f, 13f, -45f, 90f)
         }
         Ic.SHIELD -> {
             poly(12f, 3f, 19f, 6f, 19f, 12f, 12f, 21f, 5f, 12f, 5f, 6f, close = true)
