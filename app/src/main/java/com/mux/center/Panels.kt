@@ -15,7 +15,9 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -31,9 +33,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -63,6 +65,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
@@ -302,35 +305,73 @@ private fun NotifCard(n: NotifItem, close: () -> Unit) {
 
 // ---------------------------------------------------------------------- control center
 
+/**
+ * The Control Center always fits on one screen, so there is no vertical scrolling and a swipe up anywhere closes it.
+ * Tiles that do not fit are put on more pages that you swipe sideways.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ControlPanel(close: () -> Unit) {
     val ctx = LocalContext.current
     val tick = Sys.tick   // read so the tiles refresh every second
     PanelFrame("CONTROL CENTER", Ic.GEAR, "NOTIFICATIONS", { UiState.panel = 1 }, close) {
-        Column(
-            Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 14.dp)) {
             val tiles = Controls.visible()
-            if (tick >= 0) {
+            val pm = ctx.packageManager
+            val hasShortcuts = Controls.shortcuts.any { pm.getLaunchIntentForPackage(it.pkg) != null }
+            val gap = 10.dp
+            val tileH = 86.dp
+            val sliderH = if (maxHeight < 560.dp) 120.dp else if (maxHeight < 680.dp) 150.dp else 180.dp
+            var used = 76.dp + gap + sliderH + gap + 18.dp + gap
+            if (Media.active) used += 100.dp + gap
+            if (hasShortcuts) used += 104.dp + gap
+            val rows = ((maxHeight - used) / (tileH + gap)).toInt().coerceIn(1, 4)
+            val gridTiles = tiles.drop(2)
+            val perPage = rows * 4
+            val pages = ((gridTiles.size + perPage - 1) / perPage).coerceAtLeast(1)
+            val pager = rememberPagerState(pageCount = { pages })
+
+            Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(gap)) {
+                if (tick >= 0) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        WideTile(tiles[0], Modifier.weight(1f))
+                        WideTile(tiles[1], Modifier.weight(1f))
+                    }
+                }
+                if (Media.active) MediaCard()
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    WideTile(tiles[0], Modifier.weight(1f))
-                    WideTile(tiles[1], Modifier.weight(1f))
+                    BrightnessCard(Modifier.weight(1f), sliderH)
+                    VolumeCard(Modifier.weight(1f), sliderH)
                 }
-            }
-            if (Media.active) MediaCard()
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                BrightnessCard(Modifier.weight(1f))
-                VolumeCard(Modifier.weight(1f))
-            }
-            for (row in tiles.drop(2).chunked(4)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    for (t in row) SmallTile(t, Modifier.weight(1f))
-                    repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
+                HorizontalPager(
+                    state = pager,
+                    modifier = Modifier.fillMaxWidth().height((tileH + gap) * rows - gap),
+                    pageSpacing = 12.dp
+                ) { page ->
+                    val pageTiles = gridTiles.drop(page * perPage).take(perPage)
+                    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(gap)) {
+                        for (row in pageTiles.chunked(4)) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                                for (t in row) SmallTile(t, Modifier.weight(1f))
+                                repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
+                            }
+                        }
+                    }
                 }
+                if (pages > 1) {
+                    Row(Modifier.fillMaxWidth().height(18.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                        for (i in 0 until pages) {
+                            Box(
+                                Modifier.padding(horizontal = 4.dp).size(if (i == pager.currentPage) 8.dp else 6.dp)
+                                    .background(if (i == pager.currentPage) cMain else cDim)
+                            )
+                        }
+                    }
+                } else {
+                    Spacer(Modifier.height(18.dp))
+                }
+                Shortcuts()
             }
-            Shortcuts()
-            Spacer(Modifier.height(8.dp))
         }
     }
 }
@@ -434,10 +475,10 @@ fun VSlider(value: Float, enabled: Boolean, onChange: (Float) -> Unit, onBlocked
 }
 
 @Composable
-private fun SliderCard(icon: Ic, label: String, modifier: Modifier, slider: @Composable (Modifier) -> Unit, extra: @Composable () -> Unit = {}) {
+private fun SliderCard(icon: Ic, label: String, modifier: Modifier, height: Dp, slider: @Composable (Modifier) -> Unit, extra: @Composable () -> Unit = {}) {
     val shape = HudShape(12.dp)
     Row(
-        modifier.height(190.dp).background(cPanel, shape).border(1.dp, cDim, shape).padding(14.dp),
+        modifier.height(height).background(cPanel, shape).border(1.dp, cDim, shape).padding(14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f).fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.SpaceBetween) {
@@ -450,13 +491,13 @@ private fun SliderCard(icon: Ic, label: String, modifier: Modifier, slider: @Com
 }
 
 @Composable
-private fun BrightnessCard(modifier: Modifier) {
+private fun BrightnessCard(modifier: Modifier, height: Dp) {
     val ctx = LocalContext.current
     var v by remember { mutableFloatStateOf(Controls.brightness(ctx)) }
     val canWrite = Access.writeSettings(ctx)
     val auto = Controls.autoBrightness(ctx)
     SliderCard(
-        Ic.SUN, "${(v * 100).toInt()}%", modifier,
+        Ic.SUN, "${(v * 100).toInt()}%", modifier, height,
         { m ->
             VSlider(v, canWrite, { v = it; Controls.setBrightness(ctx, it) }, { Controls.setBrightness(ctx, v) }, m)
         },
@@ -465,11 +506,11 @@ private fun BrightnessCard(modifier: Modifier) {
 }
 
 @Composable
-private fun VolumeCard(modifier: Modifier) {
+private fun VolumeCard(modifier: Modifier, height: Dp) {
     val ctx = LocalContext.current
     var v by remember { mutableFloatStateOf(Controls.volume(ctx, AudioManager.STREAM_MUSIC)) }
     SliderCard(
-        Ic.VOLUME, "${(v * 100).toInt()}%", modifier,
+        Ic.VOLUME, "${(v * 100).toInt()}%", modifier, height,
         { m -> VSlider(v, true, { v = it; Controls.setVolume(ctx, AudioManager.STREAM_MUSIC, it) }, {}, m) }
     )
 }
